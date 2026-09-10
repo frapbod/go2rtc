@@ -34,8 +34,8 @@ type Client struct {
 	Bitrate   int `json:"-"` // in bits/s
 }
 
-func Dial(rawURL string, server *srtp.Server) (*Client, error) {
-	conn, err := hap.Dial(rawURL)
+func Dial(rawURL string, server *srtp.Server, options ...hap.DialOption) (*Client, error) {
+	conn, err := hap.Dial(rawURL, options...)
 	if err != nil {
 		return nil, err
 	}
