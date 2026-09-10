@@ -34,6 +34,7 @@ type Client struct {
 	DevicePublic  []byte
 	ClientID      string // aka. Controller
 	ClientPrivate []byte
+	skipDiscovery bool
 
 	OnEvent func(res *http.Response)
 	//Output  func(msg any)
@@ -45,7 +46,19 @@ type Client struct {
 	err error
 }
 
-func Dial(rawURL string) (*Client, error) {
+// DialOption configures a client before discovery and pair verification.
+type DialOption func(*Client)
+
+// WithResolvedAddress uses an endpoint already resolved by the caller. It skips
+// mDNS rediscovery but still performs the normal HomeKit pair verification.
+func WithResolvedAddress(address string) DialOption {
+	return func(c *Client) {
+		c.DeviceAddress = address
+		c.skipDiscovery = true
+	}
+}
+
+func Dial(rawURL string, options ...DialOption) (*Client, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, err
@@ -58,6 +71,10 @@ func Dial(rawURL string) (*Client, error) {
 		DevicePublic:  DecodeKey(query.Get("device_public")),
 		ClientID:      query.Get("client_id"),
 		ClientPrivate: DecodeKey(query.Get("client_private")),
+	}
+
+	for _, option := range options {
+		option(c)
 	}
 
 	if err = c.Dial(); err != nil {
@@ -90,14 +107,16 @@ func (c *Client) Dial() (err error) {
 		return errors.New("hap: can't dial witout client_id or client_private")
 	}
 
-	// update device address (host and/or port) before dial
-	_ = mdns.QueryOrDiscovery(c.DeviceHost(), mdns.ServiceHAP, func(entry *mdns.ServiceEntry) bool {
-		if entry.Complete() && entry.Info["id"] == c.DeviceID {
-			c.DeviceAddress = entry.Addr()
-			return true
-		}
-		return false
-	})
+	if !c.skipDiscovery {
+		// update device address (host and/or port) before dial
+		_ = mdns.QueryOrDiscovery(c.DeviceHost(), mdns.ServiceHAP, func(entry *mdns.ServiceEntry) bool {
+			if entry.Complete() && entry.Info["id"] == c.DeviceID {
+				c.DeviceAddress = entry.Addr()
+				return true
+			}
+			return false
+		})
+	}
 
 	// TODO: close conn on error
 	if c.Conn, err = net.DialTimeout("tcp", c.DeviceAddress, ConnDialTimeout); err != nil {
