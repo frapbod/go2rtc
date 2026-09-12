@@ -103,6 +103,11 @@ func (c *Client) DeviceHost() string {
 }
 
 func (c *Client) Dial() (err error) {
+	defer func() {
+		if err != nil && c.Conn != nil {
+			_ = c.Conn.Close()
+		}
+	}()
 	if len(c.ClientID) == 0 || len(c.ClientPrivate) == 0 {
 		return errors.New("hap: can't dial witout client_id or client_private")
 	}
@@ -231,11 +236,12 @@ func (c *Client) Dial() (err error) {
 	// STEP M4. Read response
 	var plainM4 struct {
 		State byte `tlv8:"6"`
+		Error byte `tlv8:"7"`
 	}
 	if err = tlv8.UnmarshalReader(res.Body, res.ContentLength, &plainM4); err != nil {
 		return
 	}
-	if plainM4.State != StateM4 {
+	if plainM4.State != StateM4 || plainM4.Error != 0 {
 		return newResponseError(cipherM3, plainM4)
 	}
 

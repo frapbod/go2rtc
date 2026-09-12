@@ -16,9 +16,11 @@ import (
 )
 
 type Conn struct {
-	conn net.Conn
-	rw   *bufio.ReadWriter
-	wmu  sync.Mutex
+	conn    net.Conn
+	rw      *bufio.ReadWriter
+	wmu     sync.Mutex
+	rmu     sync.Mutex
+	readBuf []byte
 
 	encryptKey []byte
 	decryptKey []byte
@@ -81,8 +83,15 @@ const (
 )
 
 func (c *Conn) Read(b []byte) (n int, err error) {
-	if cap(b) < packetSizeMax {
-		return 0, errors.New("hap: read buffer is too small")
+	if len(b) == 0 {
+		return 0, nil
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	if len(c.readBuf) > 0 {
+		n = copy(b, c.readBuf)
+		c.readBuf = c.readBuf[n:]
+		return n, nil
 	}
 
 	verify := make([]byte, VerifySize) // verify = plain message size
@@ -90,21 +99,27 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 		return
 	}
 
-	n = int(binary.LittleEndian.Uint16(verify))
+	size := int(binary.LittleEndian.Uint16(verify))
+	if size > packetSizeMax {
+		return 0, errors.New("hap: encrypted frame exceeds maximum size")
+	}
 
-	ciphertext := make([]byte, n+Overhead)
+	ciphertext := make([]byte, size+Overhead)
 	if _, err = io.ReadFull(c.rw, ciphertext); err != nil {
-		return
+		return 0, err
 	}
 
 	nonce := make([]byte, NonceSize)
 	binary.LittleEndian.PutUint64(nonce, c.decryptCnt)
+	plain, err := chacha20poly1305.DecryptAndVerify(c.decryptKey, nil, nonce, ciphertext, verify)
+	if err != nil {
+		return 0, err
+	}
 	c.decryptCnt++
-
-	_, err = chacha20poly1305.DecryptAndVerify(c.decryptKey, b[:0], nonce, ciphertext, verify)
-
-	c.recv += n
-	return
+	c.recv += len(plain)
+	n = copy(b, plain)
+	c.readBuf = plain[n:]
+	return n, nil
 }
 
 func (c *Conn) Write(b []byte) (n int, err error) {
