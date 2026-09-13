@@ -33,6 +33,10 @@ type Client struct {
 	MaxWidth  int `json:"-"`
 	MaxHeight int `json:"-"`
 	Bitrate   int `json:"-"` // in bits/s
+
+	// InitialTimeout bounds the first media packet after setup. Zero retains
+	// the default; established streams always use core.ConnDeadline.
+	InitialTimeout time.Duration `json:"-"`
 }
 
 func Dial(rawURL string, server *srtp.Server, options ...hap.DialOption) (*Client, error) {
@@ -132,7 +136,11 @@ func (c *Client) Start() error {
 		return err
 	}
 
-	deadline := time.NewTimer(core.ConnDeadline)
+	initialTimeout := c.InitialTimeout
+	if initialTimeout <= 0 {
+		initialTimeout = core.ConnDeadline
+	}
+	deadline := time.NewTimer(initialTimeout)
 	defer deadline.Stop()
 	if err = c.startSRTP(videoTrack, audioTrack, deadline); err != nil {
 		return err
