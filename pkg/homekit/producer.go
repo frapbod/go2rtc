@@ -11,6 +11,7 @@ import (
 	"github.com/AlexxIT/go2rtc/pkg/hap"
 	"github.com/AlexxIT/go2rtc/pkg/hap/camera"
 	"github.com/AlexxIT/go2rtc/pkg/srtp"
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 )
 
@@ -131,11 +132,18 @@ func (c *Client) Start() error {
 		return err
 	}
 
-	c.srtp.AddSession(c.videoSession)
-	c.srtp.AddSession(c.audioSession)
-
 	deadline := time.NewTimer(core.ConnDeadline)
+	defer deadline.Stop()
+	if err = c.startSRTP(videoTrack, audioTrack, deadline); err != nil {
+		return err
+	}
 
+	<-deadline.C
+
+	return nil
+}
+
+func (c *Client) startSRTP(videoTrack, audioTrack *core.Receiver, deadline *time.Timer) error {
 	if videoTrack != nil {
 		c.videoSession.OnReadRTP = func(packet *rtp.Packet) {
 			deadline.Reset(core.ConnDeadline)
@@ -161,7 +169,18 @@ func (c *Client) Start() error {
 		c.audioSession.OnReadRTP = timekeeper(c.audioSession.OnReadRTP)
 	}
 
-	<-deadline.C
+	// Install readers before making either session visible to the UDP receiver.
+	c.srtp.AddSession(c.videoSession)
+	c.srtp.AddSession(c.audioSession)
+
+	// Some accessories wait for the controller's first RTCP packet before
+	// sending media. Replying only after a sender report leaves both peers
+	// waiting and adds the accessory's fallback timeout to every startup.
+	for _, session := range []*srtp.Session{c.videoSession, c.audioSession} {
+		if _, err := session.WriteRTCP(&rtcp.ReceiverReport{SSRC: session.Local.SSRC}); err != nil {
+			return fmt.Errorf("homekit: initial receiver report: %w", err)
+		}
+	}
 
 	return nil
 }

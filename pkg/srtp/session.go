@@ -1,6 +1,7 @@
 package srtp
 
 import (
+	"errors"
 	"net"
 	"time"
 
@@ -108,6 +109,9 @@ func (s *Session) WriteRTP(packet *rtp.Packet) (int, error) {
 }
 
 func (s *Session) WriteRTCP(packet rtcp.Packet) (int, error) {
+	if s.conn == nil || s.Local.srtp == nil {
+		return 0, errors.New("srtp: session is not initialized")
+	}
 	b, err := packet.Marshal()
 	if err != nil {
 		return 0, err
